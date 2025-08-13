@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Bot Control Panel</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a;
+        }
+        /* Custom scrollbar for notifications */
+        .notification-area::-webkit-scrollbar {
+            width: 8px;
+        }
+        .notification-area::-webkit-scrollbar-track {
+            background: #1e293b;
+            border-radius: 10px;
+        }
+        .notification-area::-webkit-scrollbar-thumb {
+            background-color: #475569;
+            border-radius: 10px;
+            border: 2px solid #1e293b;
+        }
+        .status-dot {
+            width: 1rem;
+            height: 1rem;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 0.5rem;
+        }
+        .status-dot.connected {
+            background-color: #10b981; /* Green */
+        }
+        .status-dot.disconnected {
+            background-color: #ef4444; /* Red */
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+    <div class="bg-gray-800 text-white p-8 rounded-2xl shadow-2xl w-full max-w-xl">
+        <!-- Header -->
+        <header class="text-center mb-8 flex justify-between items-center">
+            <h1 class="text-3xl font-bold">Trading Bot Control Panel</h1>
+            <div class="flex items-center">
+                <span id="connection-status" class="status-dot disconnected"></span>
+                <span class="text-sm text-gray-400" id="connection-text">Connecting...</span>
+            </div>
+        </header>
+
+        <!-- Live Price Display -->
+        <div class="text-center text-lg mb-6 p-4 bg-gray-700 rounded-xl shadow-inner">
+            <p class="text-gray-400">Current Price:</p>
+            <p id="live-price" class="text-3xl font-bold text-green-400">---</p>
+        </div>
+
+        <!-- Strategy Selector -->
+        <div class="mb-6">
+            <label for="strategy-select" class="block text-gray-300 font-semibold mb-2">Select Strategy</label>
+            <select id="strategy-select" class="w-full p-3 rounded-lg bg-gray-700 border border-gray-600 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="manual">Manual</option>
+                <option value="twap">TWAP</option>
+                <option value="oco">OCO</option>
+                <option value="grid">Grid Trading</option>
+                <option value="stop-limit">Stop-Limit</option>
+            </select>
+        </div>
+
+        <!-- Trade Controls -->
+        <div class="mb-6 space-y-4" id="trade-controls">
+            <!-- Asset Selector -->
+            <div>
+                <label for="asset-select" class="block text-gray-300 font-semibold mb-2">Asset</label>
+                <select id="asset-select" class="w-full p-3 rounded-lg bg-gray-700 border border-gray-600 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="" disabled selected>Loading assets...</option>
+                </select>
+            </div>
+            
+            <div>
+                <label for="amount-input" class="block text-gray-300 font-semibold mb-2">Amount</label>
+                <input type="number" id="amount-input" value="0.001" step="0.0001" class="w-full p-3 rounded-lg bg-gray-700 border border-gray-600 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+
+            <!-- Strategy-specific Inputs will be injected here -->
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="flex gap-4 mb-6">
+            <button id="buy-button" class="flex-1 p-4 rounded-xl text-lg font-bold bg-green-600 hover:bg-green-500 transition-colors shadow-lg">Buy</button>
+            <button id="sell-button" class="flex-1 p-4 rounded-xl text-lg font-bold bg-red-600 hover:bg-red-500 transition-colors shadow-lg">Sell</button>
+        </div>
+        
+        <!-- Rationale Button -->
+        <button id="rationale-button" class="w-full p-4 mb-6 rounded-xl text-lg font-bold bg-blue-600 hover:bg-blue-500 transition-colors shadow-lg flex items-center justify-center">
+            Generate Rationale ✨
+        </button>
+
+        <!-- Status / Notifications -->
+        <div>
+            <h2 class="text-xl font-bold mb-3">Status & Notifications</h2>
+            <div id="notification-area" class="notification-area h-40 bg-gray-900 p-4 rounded-xl text-sm overflow-y-auto">
+                <p class="text-gray-400">Ready to trade...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const strategySelect = document.getElementById('strategy-select');
+            const tradeControls = document.getElementById('trade-controls');
+            const livePriceDisplay = document.getElementById('live-price');
+            const buyButton = document.getElementById('buy-button');
+            const sellButton = document.getElementById('sell-button');
+            const rationaleButton = document.getElementById('rationale-button');
+            const notificationArea = document.getElementById('notification-area');
+            const assetSelect = document.getElementById('asset-select');
+            const amountInput = document.getElementById('amount-input');
+            const connectionStatusDot = document.getElementById('connection-status');
+            const connectionStatusText = document.getElementById('connection-text');
+            const apiUrl = 'http://127.0.0.1:8000/trade';
+            const healthCheckUrl = 'http://127.0.0.1:8000/health';
+            const rationaleUrl = 'http://127.0.0.1:8000/generate_rationale';
+            const assetsUrl = 'http://127.0.0.1:8000/assets';
+
+            let priceUpdateInterval;
+
+            // --- UI Functions ---
+            async function updateLivePrice() {
+                const selectedAsset = assetSelect.value;
+                if (!selectedAsset) {
+                    livePriceDisplay.textContent = '---';
+                    return;
+                }
+                
+                try {
+                    const response = await fetch(`http://127.0.0.1:8000/price/${selectedAsset}`);
+                    const data = await response.json();
+                    if (response.ok) {
+                        const livePrice = parseFloat(data.price);
+                        livePriceDisplay.textContent = `$${livePrice.toLocaleString()}`;
+                        livePriceDisplay.style.color = livePrice > 69000 ? '#10b981' : '#ef4444'; // Green for high, Red for low (simple example)
+                    } else {
+                        throw new Error(data.detail || 'Failed to fetch price.');
+                    }
+                } catch (error) {
+                    livePriceDisplay.textContent = 'Error';
+                    logNotification(`ERROR: Could not fetch price for ${selectedAsset}. Is the server running?`, 'error');
+                }
+            }
+
+            function logNotification(message, type = 'info') {
+                const now = new Date();
+                const timestamp = now.toLocaleTimeString();
+                const messageElement = document.createElement('p');
+                messageElement.textContent = `[${timestamp}] ${message}`;
+                
+                if (type === 'success') {
+                    messageElement.classList.add('text-green-400');
+                } else if (type === 'error') {
+                    messageElement.classList.add('text-red-400');
+                } else if (type === 'gemini') {
+                    messageElement.classList.add('text-blue-300');
+                    messageElement.style.whiteSpace = 'pre-wrap';
+                } else {
+                    messageElement.classList.add('text-gray-400');
+                }
+
+                if (notificationArea.firstChild) {
+                    notificationArea.insertBefore(messageElement, notificationArea.firstChild);
+                } else {
+                    notificationArea.appendChild(messageElement);
+                }
+                
+                notificationArea.scrollTop = 0;
+            }
+
+            function renderInputs(strategy) {
+                const dynamicInputs = document.querySelectorAll('.dynamic-input');
+                dynamicInputs.forEach(input => input.remove());
+                
+                const fragments = document.createDocumentFragment();
+
+                switch (strategy) {
+                    case 'manual':
+                        fragments.appendChild(createInput('price-input', 'Price', 'number', '68500', '0.01'));
+                        fragments.appendChild(createSelect('time-in-force-select', 'Time in Force', ['GTC', 'IOC', 'FOK']));
+                        break;
+                    case 'twap':
+                        fragments.appendChild(createInput('duration-input', 'Duration (minutes)', 'number', '30', '1'));
+                        fragments.appendChild(createInput('interval-input', 'Interval (seconds)', 'number', '60', '1'));
+                        break;
+                    case 'oco':
+                        fragments.appendChild(createInput('tp-input', 'Take Profit', 'number', '70000', '0.01'));
+                        fragments.appendChild(createInput('sl-input', 'Stop Loss', 'number', '65000', '0.01'));
+                        break;
+                    case 'grid':
+                        fragments.appendChild(createInput('lower-bound-input', 'Lower Bound', 'number', '58000', '0.01'));
+                        fragments.appendChild(createInput('upper-bound-input', 'Upper Bound', 'number', '70000', '0.01'));
+                        fragments.appendChild(createInput('num-levels-input', 'Number of Levels', 'number', '10', '1'));
+                        fragments.appendChild(createInput('qty-per-level-input', 'Quantity per Level', 'number', '0.001', '0.001'));
+                        break;
+                    case 'stop-limit':
+                        fragments.appendChild(createInput('stop-price-input', 'Stop Price', 'number', '68000', '0.01'));
+                        fragments.appendChild(createInput('limit-price-input', 'Limit Price', 'number', '67900', '0.01'));
+                        break;
+                }
+                tradeControls.appendChild(fragments);
+            }
+
+            function createInput(id, label, type, value, step) {
+                const div = document.createElement('div');
+                div.classList.add('dynamic-input');
+                div.innerHTML = `
+                    <label for="${id}" class="block text-gray-300 font-semibold mb-2">${label}</label>
+                    <input type="${type}" id="${id}" value="${value}" step="${step}" class="w-full p-3 rounded-lg bg-gray-700 border border-gray-600 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                `;
+                return div;
+            }
+
+            function createSelect(id, label, options) {
+                const div = document.createElement('div');
+                div.classList.add('dynamic-input');
+                const optionsHtml = options.map(opt => `<option value="${opt}">${opt}</option>`).join('');
+                div.innerHTML = `
+                    <label for="${id}" class="block text-gray-300 font-semibold mb-2">${label}</label>
+                    <select id="${id}" class="w-full p-3 rounded-lg bg-gray-700 border border-gray-600 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        ${optionsHtml}
+                    </select>
+                `;
+                return div;
+            }
+
+            async function fetchAndRenderAssets() {
+                try {
+                    const response = await fetch(assetsUrl);
+                    if (response.ok) {
+                        const data = await response.json();
+                        assetSelect.innerHTML = ''; // Clear existing options
+                        data.symbols.forEach(symbol => {
+                            const option = document.createElement('option');
+                            option.value = symbol;
+                            option.textContent = symbol;
+                            assetSelect.appendChild(option);
+                        });
+                        logNotification(`Loaded ${data.symbols.length} trading assets.`, 'info');
+                        updateLivePrice(); // Get initial price after assets are loaded
+                    } else {
+                        throw new Error('Failed to fetch assets.');
+                    }
+                } catch (error) {
+                    logNotification('ERROR: Could not fetch trading assets. Is the server running?', 'error');
+                }
+            }
+
+            // --- Server Communication ---
+            async function checkServerStatus() {
+                try {
+                    const response = await fetch(healthCheckUrl);
+                    if (response.ok) {
+                        connectionStatusDot.classList.remove('disconnected');
+                        connectionStatusDot.classList.add('connected');
+                        connectionStatusText.textContent = 'Connected';
+                    } else {
+                        throw new Error('Server not responding');
+                    }
+                } catch (error) {
+                    connectionStatusDot.classList.remove('connected');
+                    connectionStatusDot.classList.add('disconnected');
+                    connectionStatusText.textContent = 'Disconnected';
+                }
+            }
+            setInterval(checkServerStatus, 5000); // Check every 5 seconds
+
+            async function placeOrder(side) {
+                if (connectionStatusDot.classList.contains('disconnected')) {
+                    logNotification('ERROR: Python server is not connected. Please start the server.', 'error');
+                    return;
+                }
+
+                const strategy = strategySelect.value;
+                const asset = assetSelect.value;
+                const amount = parseFloat(amountInput.value);
+
+                if (!asset || isNaN(amount) || amount <= 0) {
+                    logNotification('Invalid asset or amount.', 'error');
+                    return;
+                }
+
+                let payload = {
+                    strategy: strategy,
+                    side: side,
+                    symbol: asset,
+                    amount: amount
+                };
+
+                switch (strategy) {
+                    case 'manual':
+                        const priceInput = document.getElementById('price-input');
+                        if (priceInput && priceInput.value) {
+                            payload.price = parseFloat(priceInput.value);
+                            payload['time-in-force'] = document.getElementById('time-in-force-select').value;
+                        }
+                        break;
+                    case 'twap':
+                        payload.duration = parseInt(document.getElementById('duration-input').value);
+                        payload.interval = parseInt(document.getElementById('interval-input').value);
+                        break;
+                    case 'oco':
+                        payload.tp = parseFloat(document.getElementById('tp-input').value);
+                        payload.sl = parseFloat(document.getElementById('sl-input').value);
+                        break;
+                    case 'grid':
+                        payload.lower_bound = parseFloat(document.getElementById('lower-bound-input').value);
+                        payload.upper_bound = parseFloat(document.getElementById('upper-bound-input').value);
+                        payload.num_levels = parseInt(document.getElementById('num-levels-input').value);
+                        payload.amount = parseFloat(document.getElementById('amount-input').value);
+                        break;
+                    case 'stop-limit':
+                        payload.stop_price = parseFloat(document.getElementById('stop-price-input').value);
+                        payload.limit_price = parseFloat(document.getElementById('limit-price-input').value);
+                        break;
+                }
+
+                logNotification(`Placing a ${side} order for ${amount} ${asset} using the ${strategy} strategy...`);
+
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(payload),
+                    });
+
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        logNotification(`SUCCESS: ${data.message}`, 'success');
+                        console.log(data.details);
+                    } else {
+                        logNotification(`ERROR: ${data.detail || data.message}`, 'error');
+                    }
+                } catch (error) {
+                    logNotification(`A network error occurred. Please ensure the Python server is running and accessible.`, 'error');
+                    console.error('Fetch error:', error);
+                }
+            }
+            
+            async function generateTradeRationale() {
+                if (connectionStatusDot.classList.contains('disconnected')) {
+                    logNotification('ERROR: Python server is not connected. Please start the server.', 'error');
+                    return;
+                }
+
+                const strategy = strategySelect.value;
+                const asset = assetSelect.value;
+                const amount = parseFloat(amountInput.value);
+                const side = buyButton.classList.contains('active') ? 'BUY' : 'SELL';
+
+                if (!asset || isNaN(amount) || amount <= 0) {
+                    logNotification('Invalid asset or amount.', 'error');
+                    return;
+                }
+
+                const payload = {
+                    strategy: strategy,
+                    side: side,
+                    symbol: asset,
+                    amount: amount
+                };
+                
+                logNotification('Generating trade rationale...', 'info');
+                
+                try {
+                    const response = await fetch(rationaleUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(payload),
+                    });
+
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        logNotification(`OpenAI Rationale:\n${data.rationale}`, 'gemini');
+                    } else {
+                        logNotification(`ERROR: ${data.detail || data.message}`, 'error');
+                    }
+                } catch (error) {
+                    logNotification(`A network error occurred. Could not generate rationale.`, 'error');
+                    console.error('Fetch error:', error);
+                }
+            }
+
+            // --- Event Listeners and Initial Setup ---
+            strategySelect.addEventListener('change', (e) => {
+                renderInputs(e.target.value);
+            });
+            buyButton.addEventListener('click', () => {
+                placeOrder('BUY');
+            });
+            sellButton.addEventListener('click', () => {
+                placeOrder('SELL');
+            });
+            rationaleButton.addEventListener('click', generateTradeRationale);
+            assetSelect.addEventListener('change', () => {
+                updateLivePrice(); // Update price immediately when asset is changed
+            });
+            
+            renderInputs(strategySelect.value);
+            priceUpdateInterval = setInterval(updateLivePrice, 2000); // Start price update interval
+            checkServerStatus(); // Initial connection check
+            fetchAndRenderAssets(); // Load assets when the page first loads
+        });
+    </script>
+</body>
+</html>

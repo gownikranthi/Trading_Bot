@@ -1,0 +1,58 @@
+import unittest
+from unittest.mock import Mock, patch
+import sys
+
+# Add the src directory to the path so we can import modules
+sys.path.insert(0, './src')
+from market_orders import place_market_order
+from utils.binance_client import BinanceClient
+from utils.validation import validate_input
+
+class MockResponse:
+    """Mock a successful Binance API response."""
+    def __init__(self, status_code=200, order_id=123):
+        self.status_code = status_code
+        self.orderId = order_id
+        self.status = "NEW"
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+class TestMarketOrders(unittest.TestCase):
+    def setUp(self):
+        # Mock the BinanceClient and its methods
+        self.mock_client = Mock()
+        self.mock_binance_client = self.mock_client.get_client()
+        self.mock_binance_client.futures_create_order = Mock(return_value=MockResponse())
+
+    @patch('src.market_orders.validate_input', return_value=True)
+    def test_market_order_success(self, mock_validate_input):
+        """Test a successful market order placement."""
+        order = place_market_order(self.mock_client, 'BTCUSDT', 'BUY', 0.001)
+        self.assertIsNotNone(order)
+        self.assertEqual(order.orderId, 123)
+        self.mock_binance_client.futures_create_order.assert_called_once()
+        self.assertTrue(mock_validate_input.called)
+
+    @patch('src.market_orders.validate_input', return_value=False)
+    def test_market_order_validation_failure(self, mock_validate_input):
+        """Test that no order is placed if validation fails."""
+        order = place_market_order(self.mock_client, 'BTCUSDT', 'BUY', 0.0005)
+        self.assertIsNone(order)
+        self.assertFalse(self.mock_binance_client.futures_create_order.called)
+        self.assertTrue(mock_validate_input.called)
+
+    def test_market_order_api_failure(self):
+        """Test error handling when the Binance API call fails."""
+        from binance.exceptions import BinanceAPIException
+        self.mock_binance_client.futures_create_order.side_effect = BinanceAPIException(
+            response=Mock(status_code=400, text="Bad Request"),
+            code=-1100, message="Illegal parameters"
+        )
+        self.mock_client.handle_error = Mock() # Mock the error handler
+        order = place_market_order(self.mock_client, 'BTCUSDT', 'BUY', 0.001)
+        self.assertIsNone(order)
+        self.mock_client.handle_error.assert_called_once()
+
+
+if __name__ == '__main__':
+    unittest.main()
